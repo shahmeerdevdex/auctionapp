@@ -1,4 +1,3 @@
-
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
@@ -7,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
-import { CheckCircle, Clock, CreditCard, DollarSign, Users, X, XCircle } from 'lucide-react';
+import { CheckCircle, Clock, CreditCard, DollarSign, Users, X, XCircle, Shield, AlertTriangle } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { useAuth } from '@/components/AuthProvider';
 
@@ -64,19 +63,30 @@ export default function AuctionDetail() {
 
   useEffect(() => {
     const updateTopBidders = () => {
-      const uniqueBidders = new Set<string>();
-      const activeBids = bids.filter(bid => bid.status === 'active')
+      const userHighestBids = new Map<string, Bid>();
+      
+      bids.filter(bid => bid.status === 'active').forEach(bid => {
+        if (!userHighestBids.has(bid.user_id) || 
+            userHighestBids.get(bid.user_id)!.amount < bid.amount) {
+          userHighestBids.set(bid.user_id, bid);
+        }
+      });
+      
+      const highestBids = Array.from(userHighestBids.values())
         .sort((a, b) => b.amount - a.amount);
       
-      for (const bid of activeBids) {
+      const uniqueBidders = new Set<string>();
+      for (const bid of highestBids) {
         if (uniqueBidders.size < (auction?.max_spots || 3)) {
           uniqueBidders.add(bid.user_id);
         } else {
           break;
         }
       }
+      
       setTopBidders(uniqueBidders);
     };
+    
     updateTopBidders();
   }, [bids, auction?.max_spots]);
 
@@ -96,7 +106,6 @@ export default function AuctionDetail() {
       setAuction(data);
       setEmailsSent(data.winners_processed || false);
       
-      // Check if auction has ended
       const endTime = new Date(data.ends_at);
       setIsAuctionEnded(endTime <= new Date());
     };
@@ -118,7 +127,7 @@ export default function AuctionDetail() {
 
     const fetchUserWinnerStatus = async () => {
       if (!user || !id) return;
-      console.log("hek")
+      
       const { data, error } = await supabase
         .from('auction_winners')
         .select('*')
@@ -135,15 +144,11 @@ export default function AuctionDetail() {
         console.log('User is a winner for this auction:', data);
         setUserWinner(data);
       }
-      else{
-        console.log("heheh")
-      }
     };
 
     fetchAuction();
     fetchBids();
     if (user) {
-      console.log(user)
       fetchUserWinnerStatus();
     }
 
@@ -219,58 +224,68 @@ export default function AuctionDetail() {
   useEffect(() => {
     if (auction && 
         new Date(auction.ends_at) <= new Date() && 
-        topBidders.size > 0 && 
         !emailsSent && 
         !isSendingEmails) {
       
-      const sendWinnerEmails = async () => {
+      const processAuctionWinners = async () => {
         setIsSendingEmails(true);
         
         try {
-          console.log('Calling send-winner-email function for auction:', auction.id);
+          console.log('Calling process-auction-winners function for auction:', auction.id);
           
-          const { data, error } = await supabase.functions.invoke('send-winner-email', {
+          const { data: processData, error: processError } = await supabase.functions.invoke('process-auction-winners', {
             body: { auctionId: auction.id }
           });
-          console.log("calling winners")
-          const { data:data1, error:error1 } = await supabase.functions.invoke('process-auction-winners');
-          console.log("data1 ", data1)
-          console.log("error ", error1 )
 
-          
-
-          if (error) {
-            console.error('Error sending winner emails:', error);
+          if (processError) {
+            console.error('Error processing auction winners:', processError);
             toast({
-              title: "Error sending winner emails",
-              description: error.message || "Please try again later",
+              title: "Error processing auction winners",
+              description: processError.message || "Please try again later",
               variant: "destructive"
             });
             return;
           }
 
-          console.log('Winner emails response:', data);
+          console.log('Auction winners processed:', processData);
           setEmailsSent(true);
           
-          if (data.successCount > 0) {
+          if (processData && processData.results && processData.results.length > 0) {
+            const auction = processData.results[0];
+            const winnerCount = auction.winners?.length || 0;
+            
             toast({
-              title: "Winner emails sent",
-              description: `${data.successCount} email notifications have been sent to auction winners`
+              title: "Auction completed",
+              description: `${winnerCount} winners have been notified`
             });
           } else {
             toast({
-              title: "No emails sent",
-              description: "No eligible winners found or all emails failed to send",
+              title: "Auction completed",
+              description: "No qualifying bids found for this auction",
               variant: "destructive"
             });
           }
           
-          setAuction(prev => prev ? {...prev, winners_processed: true} : null);
+          setAuction(prev => prev ? {...prev, winners_processed: true, status: 'completed'} : null);
+          
+          // Refresh user winner status if the current user participated
+          if (user) {
+            const { data: winnerData } = await supabase
+              .from('auction_winners')
+              .select('*')
+              .eq('auction_id', auction.id)
+              .eq('user_id', user.id)
+              .maybeSingle();
+              
+            if (winnerData) {
+              setUserWinner(winnerData);
+            }
+          }
           
         } catch (error) {
-          console.error('Error invoking send-winner-email function:', error);
+          console.error('Error invoking process-auction-winners function:', error);
           toast({
-            title: "Error sending winner emails",
+            title: "Error processing auction winners",
             description: "An unexpected error occurred",
             variant: "destructive"
           });
@@ -279,9 +294,9 @@ export default function AuctionDetail() {
         }
       };
 
-      sendWinnerEmails();
+      processAuctionWinners();
     }
-  }, [auction, topBidders, emailsSent, toast, isSendingEmails]);
+  }, [auction, emailsSent, toast, isSendingEmails, user]);
 
   const handleBid = async () => {
     if (!auction || !currentUser) {
@@ -304,6 +319,15 @@ export default function AuctionDetail() {
     }
 
     try {
+      const highestBid = bids.find(bid => 
+        bid.amount === auction.current_price && 
+        bid.status === 'active' && 
+        bid.user_id !== currentUser
+      );
+      
+      const outbidUserId = highestBid?.user_id;
+      console.log("Current highest bidder who will be outbid:", outbidUserId);
+
       const { data, error } = await supabase
         .from('bids')
         .insert([
@@ -333,6 +357,45 @@ export default function AuctionDetail() {
           variant: "destructive",
         });
         return;
+      }
+
+      // Send email notifications to all bidders
+      try {
+        console.log('Invoking bid-notification-email function with bid ID:', data.id);
+        const { data: notificationData, error: notificationError } = await supabase.functions.invoke('bid-notification-email', {
+          body: { bidId: data.id }
+        });
+
+        if (notificationError) {
+          console.error('Error sending bid notifications:', notificationError);
+          toast({
+            title: "Warning",
+            description: "Bid placed but there was an issue sending notifications",
+            variant: "destructive",
+          });
+        } else {
+          console.log('Notification response:', notificationData);
+        }
+        
+        // Send specific outbid notification if someone was outbid
+        if (outbidUserId) {
+          console.log('Sending outbid notification to user:', outbidUserId);
+          
+          const { data: outbidData, error: outbidError } = await supabase.functions.invoke('bid-notification-email', {
+            body: { 
+              auctionId: auction.id,
+              outbidUserId: outbidUserId
+            }
+          });
+          
+          if (outbidError) {
+            console.error('Error sending outbid notification:', outbidError);
+          } else {
+            console.log('Outbid notification response:', outbidData);
+          }
+        }
+      } catch (notificationError) {
+        console.error('Failed to invoke bid notification function:', notificationError);
       }
 
       setBidAmount('');
@@ -380,7 +443,6 @@ export default function AuctionDetail() {
     if (userWinner && userWinner.winning_bid_id) {
       bidId = userWinner.winning_bid_id;
     } else {
-      // If no specific winning bid is recorded, find user's highest bid
       const userBids = bids.filter(bid => bid.user_id === currentUser && bid.status === 'active')
                           .sort((a, b) => b.amount - a.amount);
       
@@ -407,6 +469,16 @@ export default function AuctionDetail() {
     (userWinner.status === 'pending_payment' || 
      (isAuctionEnded && topBidders.has(currentUser || '')));
   
+  const userHighestBid = currentUser ? 
+    bids.filter(bid => bid.user_id === currentUser && bid.status === 'active')
+        .sort((a, b) => b.amount - a.amount)[0] : null;
+  
+  const userHasSecurePlace = currentUser && topBidders.has(currentUser);
+  
+  const userHasBidsButNotWinning = currentUser && 
+    bids.some(bid => bid.user_id === currentUser && bid.status === 'active') && 
+    !topBidders.has(currentUser);
+  
   return (
     <div className="container mx-auto px-4 py-8">
       <Card className="mb-8">
@@ -428,6 +500,20 @@ export default function AuctionDetail() {
               {isUserEligibleToPay && (
                 <Badge variant="default" className="bg-green-500">
                   You won this auction!
+                </Badge>
+              )}
+              
+              {userHasSecurePlace && !isAuctionEnded && (
+                <Badge variant="outline" className="border-green-500 text-green-600 bg-green-50">
+                  <Shield className="w-4 h-4 mr-1" />
+                  Securing a place
+                </Badge>
+              )}
+              
+              {userHasBidsButNotWinning && !isAuctionEnded && (
+                <Badge variant="outline" className="border-yellow-500 text-yellow-600 bg-yellow-50">
+                  <AlertTriangle className="w-4 h-4 mr-1" />
+                  Not winning
                 </Badge>
               )}
             </div>
@@ -454,6 +540,71 @@ export default function AuctionDetail() {
             </div>
           )}
 
+          {userHasSecurePlace && !isAuctionEnded && (
+            <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg">
+              <h3 className="text-xl font-semibold text-green-700 mb-2">You're currently securing a place!</h3>
+              <p className="mb-2">Your bid is among the top {auction.max_spots} bids right now.</p>
+              <p className="text-sm text-green-700">Keep an eye on the auction as others may place higher bids.</p>
+            </div>
+          )}
+          
+          {userHasBidsButNotWinning && !isAuctionEnded && (
+            <div className="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+              <h3 className="text-xl font-semibold text-yellow-700 mb-2">Your bid is not high enough!</h3>
+              <p className="mb-2">You have placed bids, but they're not among the top {auction.max_spots} bids right now.</p>
+              <p className="mb-4 text-sm text-yellow-700">
+                Consider placing a higher bid to secure your place in this auction.
+              </p>
+              {userHighestBid && (
+                <div className="text-sm bg-white p-2 rounded mb-4">
+                  <p>Your highest bid: <strong>${userHighestBid.amount}</strong></p>
+                  <p>Current minimum winning bid: <strong>${
+                    bids.filter(bid => bid.status === 'active')
+                        .sort((a, b) => b.amount - a.amount)
+                        .slice(0, auction.max_spots)
+                        .pop()?.amount || auction.current_price
+                  }</strong></p>
+                </div>
+              )}
+              <Input
+                type="number"
+                placeholder="Enter higher bid amount"
+                value={bidAmount}
+                onChange={(e) => setBidAmount(e.target.value)}
+                min={auction.current_price + 1}
+                className="mb-2"
+              />
+              <Button 
+                onClick={handleBid}
+                className="bg-yellow-600 hover:bg-yellow-700 text-white"
+              >
+                Place Higher Bid
+              </Button>
+            </div>
+          )}
+          
+          {currentUser && !userHasBidsButNotWinning && !userHasSecurePlace && !isUserEligibleToPay && !isAuctionEnded && (
+            <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+              <h3 className="text-xl font-semibold text-blue-700 mb-2">Place a bid to secure your spot!</h3>
+              <p className="mb-4">You haven't placed any bids yet. Place a bid now to secure one of the {auction.max_spots} available spots.</p>
+              <div className="flex gap-4">
+                <Input
+                  type="number"
+                  placeholder="Enter bid amount"
+                  value={bidAmount}
+                  onChange={(e) => setBidAmount(e.target.value)}
+                  min={auction.current_price + 1}
+                />
+                <Button 
+                  onClick={handleBid}
+                  disabled={auction.filled_spots >= auction.max_spots || !currentUser}
+                >
+                  Place Bid
+                </Button>
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
             <div className="space-y-4">
               <h3 className="text-xl font-semibold">Auction Details</h3>
@@ -468,7 +619,7 @@ export default function AuctionDetail() {
                 </div>
               </div>
 
-              {!isAuctionEnded && (
+              {!isAuctionEnded && !userHasBidsButNotWinning && (
                 <div className="pt-4">
                   <div className="flex gap-4">
                     <Input
@@ -495,13 +646,18 @@ export default function AuctionDetail() {
                 {bids.map((bid) => {
                   const isUserInTopSpots = topBidders.has(bid.user_id);
                   const isCurrentUserBid = bid.user_id === currentUser;
+                  
+                  const isUsersHighestBid = isCurrentUserBid && 
+                    (!userHighestBid || bid.amount >= userHighestBid.amount);
+                  
                   const bidStyle = isCurrentUserBid ? 
-                    (isUserInTopSpots ? "bg-green-100" : "bg-red-100") : 
+                    (isUsersHighestBid && isUserInTopSpots ? "bg-green-100" : "bg-red-100") : 
                     "bg-secondary/10";
+                    
                   return (
                     <div key={bid.id} className={`flex justify-between items-center p-2 rounded ${bidStyle}`}>
                       <div className="flex items-center gap-2">
-                        {isCurrentUserBid && (
+                        {isCurrentUserBid && isUsersHighestBid && (
                           isUserInTopSpots ? 
                             <CheckCircle className="w-4 h-4 text-green-600" /> :
                             <XCircle className="w-4 h-4 text-red-600" />
@@ -509,6 +665,12 @@ export default function AuctionDetail() {
                         <span className={bid.status === 'cancelled' ? 'text-muted-foreground line-through' : ''}>
                           ${bid.amount}
                         </span>
+                        {isUserInTopSpots && !isCurrentUserBid && (
+                          <Badge variant="outline" className="ml-1 text-xs py-0 px-1">Top Bidder</Badge>
+                        )}
+                        {isCurrentUserBid && !isUsersHighestBid && (
+                          <span className="text-xs text-muted-foreground ml-1">Previous bid</span>
+                        )}
                       </div>
                       <div className="flex items-center gap-2">
                         <span className="text-sm text-muted-foreground">

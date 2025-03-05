@@ -1,4 +1,3 @@
-
 import { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
@@ -15,12 +14,34 @@ export default function Auth() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState('signin');
+  const [showResetForm, setShowResetForm] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
   const { toast } = useToast();
   const { user } = useAuth();
+  
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (hash && hash.includes('type=recovery')) {
+      setShowResetForm(true);
+      const token = new URLSearchParams(hash.substring(1)).get('access_token');
+      if (token) {
+        toast({
+          title: "Password Reset",
+          description: "Please enter your new password.",
+        });
+      }
+    }
+    
+    if (hash && hash.includes('type=signup')) {
+      toast({
+        title: "Email Verified",
+        description: "Your email has been verified. You can now sign in.",
+      });
+    }
+  }, [toast]);
 
-  // Redirect if user is already logged in
   useEffect(() => {
     if (user) {
       const from = location.state?.from?.pathname || '/';
@@ -32,9 +53,12 @@ export default function Auth() {
     e.preventDefault();
     setLoading(true);
     
-    const { error } = await supabase.auth.signUp({
+    const { error, data } = await supabase.auth.signUp({
       email,
       password,
+      options: {
+        emailRedirectTo: `${window.location.origin}/auth`,
+      }
     });
 
     if (error) {
@@ -46,8 +70,9 @@ export default function Auth() {
     } else {
       toast({
         title: "Success!",
-        description: "Please check your email to confirm your account.",
+        description: "Please check your email to confirm your account. Don't forget to check your spam folder.",
       });
+      setActiveTab('signin');
     }
     setLoading(false);
   };
@@ -71,9 +96,70 @@ export default function Auth() {
     setLoading(false);
   };
 
+  const handlePasswordReset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${window.location.origin}/auth#type=recovery`,
+    });
+
+    if (error) {
+      toast({
+        title: "Error",
+        description: error.message,
+        variant: "destructive",
+      });
+    } else {
+      toast({
+        title: "Recovery Email Sent",
+        description: "Check your email for the password reset link.",
+      });
+      setShowResetForm(false);
+    }
+    setLoading(false);
+  };
+
+  const handleUpdatePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!password || password.length < 6) {
+      toast({
+        title: "Invalid Password",
+        description: "Password must be at least 6 characters long.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setLoading(true);
+    
+    const { error } = await supabase.auth.updateUser({
+      password,
+    });
+
+    if (error) {
+      toast({
+        title: "Error updating password",
+        description: error.message,
+        variant: "destructive",
+      });
+    } else {
+      toast({
+        title: "Password Updated",
+        description: "Your password has been successfully updated. You can now sign in.",
+      });
+      setShowResetForm(false);
+      setActiveTab('signin');
+    }
+    setLoading(false);
+  };
+
   const handleGithubLogin = async () => {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'github',
+      options: {
+        redirectTo: `${window.location.origin}/auth`,
+      }
     });
 
     if (error) {
@@ -85,6 +171,82 @@ export default function Auth() {
     }
   };
 
+  const renderPasswordResetForm = () => {
+    if (window.location.hash.includes('type=recovery')) {
+      return (
+        <div className="space-y-4">
+          <div className="text-center mb-4">
+            <h2 className="text-xl font-semibold">Reset Your Password</h2>
+            <p className="text-sm text-muted-foreground">Enter your new password below</p>
+          </div>
+          <form onSubmit={handleUpdatePassword} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="new-password">New Password</Label>
+              <Input
+                id="new-password"
+                type="password"
+                placeholder="Enter your new password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+              />
+            </div>
+            <Button type="submit" className="w-full" disabled={loading}>
+              {loading ? 'Updating...' : 'Update Password'}
+            </Button>
+            <div className="text-center">
+              <Button variant="link" onClick={() => setShowResetForm(false)}>
+                Back to Sign In
+              </Button>
+            </div>
+          </form>
+        </div>
+      );
+    } else {
+      return (
+        <div className="space-y-4">
+          <div className="text-center mb-4">
+            <h2 className="text-xl font-semibold">Reset Your Password</h2>
+            <p className="text-sm text-muted-foreground">Enter your email to receive a password reset link</p>
+          </div>
+          <form onSubmit={handlePasswordReset} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="reset-email">Email</Label>
+              <Input
+                id="reset-email"
+                type="email"
+                placeholder="Enter your email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+              />
+            </div>
+            <Button type="submit" className="w-full" disabled={loading}>
+              {loading ? 'Sending...' : 'Send Reset Link'}
+            </Button>
+            <div className="text-center">
+              <Button variant="link" onClick={() => setShowResetForm(false)}>
+                Back to Sign In
+              </Button>
+            </div>
+          </form>
+        </div>
+      );
+    }
+  };
+
+  if (showResetForm || window.location.hash.includes('type=recovery')) {
+    return (
+      <div className="container max-w-md mx-auto px-4 py-16">
+        <Card>
+          <CardContent className="pt-6">
+            {renderPasswordResetForm()}
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="container max-w-md mx-auto px-4 py-16">
       <Card>
@@ -93,7 +255,7 @@ export default function Auth() {
           <CardDescription>Sign in to start bidding on auctions</CardDescription>
         </CardHeader>
         <CardContent>
-          <Tabs defaultValue="signin">
+          <Tabs value={activeTab} onValueChange={setActiveTab}>
             <TabsList className="grid w-full grid-cols-2 mb-8">
               <TabsTrigger value="signin">Sign In</TabsTrigger>
               <TabsTrigger value="signup">Sign Up</TabsTrigger>
@@ -126,6 +288,16 @@ export default function Auth() {
                 <Button type="submit" className="w-full" disabled={loading}>
                   {loading ? 'Signing in...' : 'Sign In'}
                 </Button>
+                <div className="text-center mt-2">
+                  <Button 
+                    variant="link" 
+                    type="button" 
+                    onClick={() => setShowResetForm(true)}
+                    className="text-sm text-muted-foreground"
+                  >
+                    Forgot your password?
+                  </Button>
+                </div>
               </form>
             </TabsContent>
 
@@ -156,6 +328,11 @@ export default function Auth() {
                 <Button type="submit" className="w-full" disabled={loading}>
                   {loading ? 'Signing up...' : 'Sign Up'}
                 </Button>
+                <div className="text-center mt-2">
+                  <p className="text-xs text-muted-foreground">
+                    By signing up, you will need to verify your email before you can sign in.
+                  </p>
+                </div>
               </form>
             </TabsContent>
           </Tabs>

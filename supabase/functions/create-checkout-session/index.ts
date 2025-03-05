@@ -93,7 +93,7 @@ serve(async (req) => {
           bid_id: bidId,
           user_id: bid.user_id,
           amount: bid.amount,
-          status: 'completed',
+          status: 'pending',
           stripe_session_id: session.id,
         }
       ])
