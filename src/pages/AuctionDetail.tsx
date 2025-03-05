@@ -75,16 +75,14 @@ export default function AuctionDetail() {
       const highestBids = Array.from(userHighestBids.values())
         .sort((a, b) => b.amount - a.amount);
       
-      const uniqueBidders = new Set<string>();
-      for (const bid of highestBids) {
-        if (uniqueBidders.size < (auction?.max_spots || 3)) {
-          uniqueBidders.add(bid.user_id);
-        } else {
-          break;
-        }
+      const topN = auction?.max_spots || 3;
+      const topBidderIds = new Set<string>();
+      
+      for (let i = 0; i < Math.min(topN, highestBids.length); i++) {
+        topBidderIds.add(highestBids[i].user_id);
       }
       
-      setTopBidders(uniqueBidders);
+      setTopBidders(topBidderIds);
     };
     
     updateTopBidders();
@@ -342,15 +340,6 @@ export default function AuctionDetail() {
         .single();
 
       if (error) {
-        if (error.message.includes('Maximum number of spots reached')) {
-          toast({
-            title: "Cannot place bid",
-            description: "This auction has reached its maximum number of participants",
-            variant: "destructive",
-          });
-          return;
-        }
-
         toast({
           title: "Error placing bid",
           description: error.message,
@@ -359,7 +348,6 @@ export default function AuctionDetail() {
         return;
       }
 
-      // Send email notifications to all bidders
       try {
         console.log('Invoking bid-notification-email function with bid ID:', data.id);
         const { data: notificationData, error: notificationError } = await supabase.functions.invoke('bid-notification-email', {
@@ -586,7 +574,7 @@ export default function AuctionDetail() {
           {currentUser && !userHasBidsButNotWinning && !userHasSecurePlace && !isUserEligibleToPay && !isAuctionEnded && (
             <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
               <h3 className="text-xl font-semibold text-blue-700 mb-2">Place a bid to secure your spot!</h3>
-              <p className="mb-4">You haven't placed any bids yet. Place a bid now to secure one of the {auction.max_spots} available spots.</p>
+              <p className="mb-4">Place a bid now to try to secure one of the {auction.max_spots} available spots.</p>
               <div className="flex gap-4">
                 <Input
                   type="number"
@@ -638,31 +626,31 @@ export default function AuctionDetail() {
               <h3 className="text-xl font-semibold mb-4">Bid History</h3>
               <div className="space-y-2">
                 {bids.map((bid) => {
-                  const isUserInTopSpots = topBidders.has(bid.user_id);
                   const isCurrentUserBid = bid.user_id === currentUser;
                   
-                  const isUsersHighestBid = isCurrentUserBid && 
-                    (!userHighestBid || bid.amount >= userHighestBid.amount);
-                  
-                  const bidStyle = isCurrentUserBid ? 
-                    (isUsersHighestBid && isUserInTopSpots ? "bg-green-100" : "bg-red-100") : 
-                    "bg-secondary/10";
-                    
                   const userBids = bids.filter(b => 
                     b.user_id === bid.user_id && 
                     b.status === 'active'
                   );
                   
-                  const isUsersTopBid = userBids.length > 0 && 
-                    bid.amount === Math.max(...userBids.map(b => b.amount));
+                  const userHighestBid = userBids.length > 0 
+                    ? userBids.reduce((prev, current) => (prev.amount > current.amount) ? prev : current) 
+                    : null;
                   
-                  const showTopBidderBadge = isUserInTopSpots && isUsersTopBid;
+                  const isTopBidder = topBidders.has(bid.user_id);
+                  const isUsersHighestBid = userHighestBid && bid.id === userHighestBid.id;
+                  
+                  const showTopBidderBadge = isTopBidder && isUsersHighestBid;
+                  
+                  const bidStyle = isCurrentUserBid ? 
+                    (isUsersHighestBid && isTopBidder ? "bg-green-100" : "bg-red-100") : 
+                    "bg-secondary/10";
                   
                   return (
                     <div key={bid.id} className={`flex justify-between items-center p-2 rounded ${bidStyle}`}>
                       <div className="flex items-center gap-2">
                         {isCurrentUserBid && isUsersHighestBid && (
-                          isUserInTopSpots ? 
+                          isTopBidder ? 
                             <CheckCircle className="w-4 h-4 text-green-600" /> :
                             <XCircle className="w-4 h-4 text-red-600" />
                         )}

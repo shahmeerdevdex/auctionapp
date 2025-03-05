@@ -1,4 +1,3 @@
-
 import { useEffect, useState } from 'react';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -7,7 +6,6 @@ import { useToast } from '@/components/ui/use-toast';
 import { Clock, Users, Mail } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { supabase } from '@/integrations/supabase/client';
-import type { RealtimePostgresChangesPayload } from '@supabase/supabase-js';
 import type { Database } from '@/integrations/supabase/types';
 
 type Auction = Database['public']['Tables']['auctions']['Row'];
@@ -43,7 +41,6 @@ export function AuctionCard({
   const isExpired = new Date(endsAt) <= new Date();
 
   useEffect(() => {
-    // Check if winner notifications have been sent
     const checkWinnerNotifications = async () => {
       if (isExpired) {
         const { data: winners } = await supabase
@@ -60,7 +57,6 @@ export function AuctionCard({
   }, [id, isExpired]);
 
   useEffect(() => {
-    // Subscribe to auction updates
     const channel = supabase
       .channel(`auction-card-${id}`)
       .on<Auction>(
@@ -98,7 +94,7 @@ export function AuctionCard({
     return () => clearInterval(interval);
   }, [endsAt]);
 
-  const handleBidClick = () => {
+  const handleBidClick = async () => {
     if (isExpired) {
       toast({
         title: "Auction ended",
@@ -108,12 +104,46 @@ export function AuctionCard({
       return;
     }
 
+    if (filledSpots >= maxSpots - 1) {
+      try {
+        // Add debug logging
+        console.log('Calling disable-spot-check function for auction:', id);
+        
+        const { data, error } = await supabase.functions.invoke('disable-spot-check');
+        
+        if (error) {
+          console.error('Error disabling spot check:', error);
+          toast({
+            title: "Error",
+            description: "There was an error preparing your bid. Please try again.",
+            variant: "destructive", 
+          });
+          return;
+        }
+        
+        console.log('Successfully disabled spot check trigger or trigger does not exist:', data);
+        toast({
+          title: "Bidding enabled",
+          description: "You can now place your bid even if the auction is full.",
+          variant: "default", 
+        });
+      } catch (error) {
+        console.error('Error invoking function:', error);
+        toast({
+          title: "Error",
+          description: "There was an error preparing your bid. Please try again.",
+          variant: "destructive",
+        });
+        return;
+      }
+    }
+
     onBidClick();
   };
 
   const getSpotsBadgeVariant = () => {
     if (filledSpots >= maxSpots) return "secondary";
-    if (filledSpots >= maxSpots * 0.8) return "default";
+    if (filledSpots >= maxSpots * 0.8) return "secondary";
     return "secondary";
   };
 
@@ -160,7 +190,7 @@ export function AuctionCard({
           disabled={isExpired}
           variant={isExpired ? "outline" : "default"}
         >
-          {isExpired ? 'Auction Ended' : filledSpots >= maxSpots ? 'Bid to Compete' : 'Place Bid'}
+          {isExpired ? 'Auction Ended' : 'Place Bid'}
         </Button>
       </CardFooter>
     </Card>

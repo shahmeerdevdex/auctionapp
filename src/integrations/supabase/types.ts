@@ -9,6 +9,21 @@ export type Json =
 export type Database = {
   public: {
     Tables: {
+      _disable_spot_check_log: {
+        Row: {
+          executed_at: string | null
+          id: string
+        }
+        Insert: {
+          executed_at?: string | null
+          id?: string
+        }
+        Update: {
+          executed_at?: string | null
+          id?: string
+        }
+        Relationships: []
+      }
       auction_winners: {
         Row: {
           auction_id: string | null
@@ -284,6 +299,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      admin_disable_check_auction_spots_trigger: {
+        Args: Record<PropertyKey, never>
+        Returns: undefined
+      }
       create_notification: {
         Args: {
           p_user_id: string
@@ -291,6 +310,13 @@ export type Database = {
           p_message: string
         }
         Returns: undefined
+      }
+      get_trigger_status: {
+        Args: Record<PropertyKey, never>
+        Returns: {
+          trigger_name: string
+          status: string
+        }[]
       }
       process_missed_payments: {
         Args: Record<PropertyKey, never>
